@@ -1,19 +1,18 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
 generator client {
   provider = "prisma-client-js"
 }
 
-datasource db{
+datasource db {
   provider = "postgresql"
 }
 
 model Paste {
-  id        String   @id
+  id        String    @id
+  title     String?
+  type      String    @default("text") // "text" | "link" | "image"
   content   String
-  createdAt DateTime @default(now())
+  createdAt DateTime  @default(now())
   expiresAt DateTime?
   maxViews  Int?
-  views     Int      @default(0)
+  views     Int       @default(0)
 }
