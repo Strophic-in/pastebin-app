@@ -10,7 +10,9 @@ model Paste {
   id        String    @id
   title     String?
   type      String    @default("text") // "text" | "link" | "image"
-  content   String
+  content   String // AES-GCM ciphertext payload (encrypted client-side)
+  encrypted Boolean   @default(false)
+  salt      String? // PBKDF2 salt — present only for password-protected pastes
   createdAt DateTime  @default(now())
   expiresAt DateTime?
   maxViews  Int?

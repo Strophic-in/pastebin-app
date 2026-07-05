@@ -2,30 +2,16 @@ import { prisma } from "@/lib/prisma";
 import { NextResponse } from "next/server";
 import { nanoid } from "nanoid";
 
-const MAX_TEXT_LENGTH = 500_000; // ~500 KB of text
-const MAX_IMAGE_DATA_URL_LENGTH = 4_200_000; // ~3 MB image as base64
+// Content arrives as an AES-GCM ciphertext payload (encrypted in the browser),
+// so the server can only enforce size limits — it never sees the plaintext.
+const MAX_TEXT_PAYLOAD = 1_500_000; // ~1 MB of encrypted text
+const MAX_IMAGE_PAYLOAD = 6_500_000; // ~3 MB image after base64 + encryption
 const MAX_TITLE_LENGTH = 120;
-const ALLOWED_IMAGE_MIMES = [
-  "image/png",
-  "image/jpeg",
-  "image/gif",
-  "image/webp",
-  "image/svg+xml",
-];
-
-function isValidHttpUrl(value: string) {
-  try {
-    const url = new URL(value);
-    return url.protocol === "http:" || url.protocol === "https:";
-  } catch {
-    return false;
-  }
-}
 
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const { content, title, type = "text", expiresIn, maxViews } = body;
+    const { content, title, type = "text", expiresIn, maxViews, encrypted, salt } = body;
 
     if (!content || typeof content !== "string" || !content.trim()) {
       return NextResponse.json(
@@ -38,6 +24,17 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Invalid paste type" }, { status: 400 });
     }
 
+    if (encrypted !== true) {
+      return NextResponse.json(
+        { error: "Pastes must be encrypted client-side" },
+        { status: 400 }
+      );
+    }
+
+    if (salt !== undefined && (typeof salt !== "string" || salt.length > 64)) {
+      return NextResponse.json({ error: "Invalid salt" }, { status: 400 });
+    }
+
     if (title && (typeof title !== "string" || title.length > MAX_TITLE_LENGTH)) {
       return NextResponse.json(
         { error: `Title must be at most ${MAX_TITLE_LENGTH} characters` },
@@ -45,34 +42,25 @@ export async function POST(request: Request) {
       );
     }
 
-    if (type === "text" && content.length > MAX_TEXT_LENGTH) {
+    const maxPayload = type === "image" ? MAX_IMAGE_PAYLOAD : MAX_TEXT_PAYLOAD;
+    if (content.length > maxPayload) {
       return NextResponse.json(
-        { error: "Text is too large (max 500 KB)" },
+        { error: type === "image" ? "Image is too large (max 3 MB)" : "Text is too large (max 1 MB)" },
         { status: 413 }
       );
     }
 
-    if (type === "link" && !isValidHttpUrl(content.trim())) {
+    // Sanity-check the ciphertext envelope shape
+    try {
+      const payload = JSON.parse(content);
+      if (typeof payload?.iv !== "string" || typeof payload?.ct !== "string") {
+        throw new Error("bad envelope");
+      }
+    } catch {
       return NextResponse.json(
-        { error: "Please provide a valid http(s) URL" },
+        { error: "Malformed encrypted payload" },
         { status: 400 }
       );
-    }
-
-    if (type === "image") {
-      const match = content.match(/^data:([a-z0-9/+.-]+);base64,/i);
-      if (!match || !ALLOWED_IMAGE_MIMES.includes(match[1].toLowerCase())) {
-        return NextResponse.json(
-          { error: "Unsupported image format" },
-          { status: 400 }
-        );
-      }
-      if (content.length > MAX_IMAGE_DATA_URL_LENGTH) {
-        return NextResponse.json(
-          { error: "Image is too large (max 3 MB)" },
-          { status: 413 }
-        );
-      }
     }
 
     let expiresAt: Date | null = null;
@@ -100,7 +88,9 @@ export async function POST(request: Request) {
         id: nanoid(8),
         title: title?.trim() || null,
         type,
-        content: type === "link" ? content.trim() : content,
+        content,
+        encrypted: true,
+        salt: salt || null,
         expiresAt,
         maxViews: parsedMaxViews,
       },

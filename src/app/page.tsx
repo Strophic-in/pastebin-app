@@ -6,15 +6,17 @@ import {
   CheckIcon,
   CopyIcon,
   ExternalLinkIcon,
-  EyeIcon,
   FileTextIcon,
   FlameIcon,
   ImageIcon,
   LinkIcon,
   Loader2Icon,
+  LockIcon,
   PlusIcon,
+  ShieldCheckIcon,
   SendIcon,
   Share2Icon,
+  SparklesIcon,
   TimerIcon,
   UploadIcon,
   XIcon,
@@ -41,6 +43,13 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { SiteHeader } from "@/components/site-header";
+import { SiteFooter } from "@/components/site-footer";
+import {
+  deriveKey,
+  encryptString,
+  generateKey,
+  generateSalt,
+} from "@/lib/crypto";
 
 const MAX_IMAGE_BYTES = 3 * 1024 * 1024; // 3 MB
 
@@ -64,8 +73,10 @@ export default function Home() {
   const [image, setImage] = useState<{ dataUrl: string; name: string; size: number } | null>(null);
   const [expiresIn, setExpiresIn] = useState("0");
   const [maxViews, setMaxViews] = useState("");
+  const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [createdUrl, setCreatedUrl] = useState<string | null>(null);
+  const [createdProtected, setCreatedProtected] = useState(false);
   const [copied, setCopied] = useState(false);
   const [dragging, setDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -92,13 +103,42 @@ export default function Home() {
 
   const handleSubmit = async () => {
     if (!canSubmit) return;
+    if (type === "link") {
+      try {
+        const url = new URL(link.trim());
+        if (url.protocol !== "http:" && url.protocol !== "https:") throw new Error();
+      } catch {
+        toast.error("Please enter a valid http(s) URL");
+        return;
+      }
+    }
     setLoading(true);
     try {
+      // Encrypt in the browser — the server only ever sees ciphertext.
+      const usePassword = password.trim().length > 0;
+      let key: CryptoKey;
+      let keyFragment = "";
+      let salt: string | undefined;
+      if (usePassword) {
+        salt = generateSalt();
+        key = await deriveKey(password, salt);
+      } else {
+        const generated = await generateKey();
+        key = generated.key;
+        keyFragment = `#k=${generated.exported}`;
+      }
+      const payload = await encryptString(
+        type === "link" ? content.trim() : content,
+        key
+      );
+
       const res = await fetch("/api/pastes", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          content,
+          content: payload,
+          encrypted: true,
+          salt,
           title: title.trim() || undefined,
           type,
           expiresIn: expiresIn !== "0" ? expiresIn : undefined,
@@ -107,8 +147,10 @@ export default function Home() {
       });
       const data = await res.json();
       if (res.ok) {
-        setCreatedUrl(`${window.location.origin}${data.url}`);
-        toast.success("Paste created!");
+        setCreatedUrl(`${window.location.origin}${data.url}${keyFragment}`);
+        setCreatedProtected(usePassword);
+        setPassword("");
+        toast.success("Encrypted & created!");
       } else {
         toast.error(data.error || "Failed to create paste");
       }
@@ -142,12 +184,14 @@ export default function Home() {
 
   const reset = () => {
     setCreatedUrl(null);
+    setCreatedProtected(false);
     setTitle("");
     setText("");
     setLink("");
     setImage(null);
     setMaxViews("");
     setExpiresIn("0");
+    setPassword("");
     setCopied(false);
   };
 
@@ -169,6 +213,28 @@ export default function Home() {
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
+              <div className="flex items-start gap-2 rounded-lg border border-primary/30 bg-primary/5 px-3 py-2.5 text-left text-xs text-muted-foreground">
+                <ShieldCheckIcon className="mt-0.5 size-4 shrink-0 text-primary" />
+                {createdProtected ? (
+                  <span>
+                    <span className="font-medium text-foreground">
+                      Encrypted with your password.
+                    </span>{" "}
+                    Viewers must enter it to decrypt — share the password
+                    separately. It can&apos;t be recovered if lost.
+                  </span>
+                ) : (
+                  <span>
+                    <span className="font-medium text-foreground">
+                      End-to-end encrypted.
+                    </span>{" "}
+                    The decryption key lives in the part of the link after{" "}
+                    <code className="font-mono">#</code> and never reaches our
+                    server — share the full link, and only its holders can read
+                    the paste.
+                  </span>
+                )}
+              </div>
               <div className="flex items-center gap-2 rounded-lg border bg-muted/50 p-2 pl-3">
                 <span className="flex-1 truncate text-left font-mono text-sm">{createdUrl}</span>
                 <Button size="sm" variant={copied ? "secondary" : "default"} onClick={copyLink}>
@@ -192,6 +258,7 @@ export default function Home() {
             </CardContent>
           </Card>
         </main>
+        <SiteFooter />
       </div>
     );
   }
@@ -200,13 +267,22 @@ export default function Home() {
     <div className="flex min-h-screen flex-col">
       <SiteHeader />
       <main className="mx-auto w-full max-w-4xl flex-1 px-4 pb-16 sm:px-6">
-        <section className="bg-grid relative -mx-4 px-4 pt-12 pb-8 text-center sm:-mx-6 sm:px-6">
-          <h1 className="text-3xl font-bold tracking-tight sm:text-4xl">
+        <section className="bg-grid relative -mx-4 overflow-hidden px-4 pt-12 pb-8 text-center sm:-mx-6 sm:px-6">
+          <div
+            aria-hidden
+            className="pointer-events-none absolute top-0 left-1/2 h-56 w-[28rem] max-w-full -translate-x-1/2 -translate-y-1/3 rounded-full bg-primary/15 blur-3xl dark:bg-primary/20"
+          />
+          <span className="inline-flex items-center gap-1.5 rounded-full border bg-card px-3 py-1 text-xs font-medium text-muted-foreground shadow-sm">
+            <SparklesIcon className="size-3.5 text-primary" />
+            Free · End-to-end encrypted · No sign-up
+          </span>
+          <h1 className="mt-4 bg-gradient-to-b from-foreground to-foreground/60 bg-clip-text text-3xl font-bold tracking-tight text-transparent sm:text-4xl">
             Share anything, instantly
           </h1>
           <p className="mx-auto mt-3 max-w-md text-muted-foreground">
-            Paste text, drop a link or upload an image — get a shareable link
-            with optional expiry and burn-after-read.
+            Paste text, drop a link or upload an image — it&apos;s encrypted in
+            your browser before it ever leaves, and only people you share the
+            link (or password) with can read it.
           </p>
         </section>
 
@@ -335,7 +411,7 @@ export default function Home() {
               </TabsContent>
             </Tabs>
 
-            <div className="grid grid-cols-1 gap-4 rounded-lg border bg-muted/30 p-4 sm:grid-cols-2">
+            <div className="grid grid-cols-1 gap-4 rounded-lg border bg-muted/30 p-4 sm:grid-cols-3">
               <div className="space-y-2">
                 <Label htmlFor="expiration">
                   <TimerIcon className="size-3.5" /> Expiration
@@ -368,12 +444,28 @@ export default function Home() {
                   className="bg-background"
                 />
               </div>
+              <div className="space-y-2">
+                <Label htmlFor="password">
+                  <LockIcon className="size-3.5" /> Password
+                  <span className="font-normal text-muted-foreground">(optional)</span>
+                </Label>
+                <Input
+                  id="password"
+                  type="password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="Extra lock on top of E2E"
+                  autoComplete="new-password"
+                  className="bg-background"
+                />
+              </div>
             </div>
 
             <div className="flex items-center justify-between gap-4">
               <p className="hidden items-center gap-1.5 text-xs text-muted-foreground sm:flex">
-                <EyeIcon className="size-3.5" />
-                No account needed — anyone with the link can view.
+                <ShieldCheckIcon className="size-3.5 text-primary" />
+                Encrypted in your browser before upload — we never see your
+                content.
               </p>
               <Button size="lg" onClick={handleSubmit} disabled={!canSubmit} className="ml-auto">
                 {loading ? <Loader2Icon className="animate-spin" /> : <SendIcon />}
@@ -383,22 +475,27 @@ export default function Home() {
           </CardContent>
         </Card>
 
-        <div className="mt-10 grid grid-cols-1 gap-4 sm:grid-cols-3">
+        <div className="mt-10 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
           {[
             {
-              icon: TimerIcon,
-              title: "Self-destructing",
-              desc: "Set links to expire after minutes, hours or days.",
+              icon: ShieldCheckIcon,
+              title: "End-to-end encrypted",
+              desc: "AES-256 encryption happens in your browser — the server only ever stores ciphertext it can't read.",
+            },
+            {
+              icon: LockIcon,
+              title: "Password protection",
+              desc: "Optionally lock a paste with a password only you and your recipient know.",
             },
             {
               icon: FlameIcon,
-              title: "Burn after reading",
-              desc: "Limit how many times a paste can be viewed.",
+              title: "Self-destructing",
+              desc: "Expire links after minutes, hours or days — or burn them after N views.",
             },
             {
               icon: Share2Icon,
               title: "Share anything",
-              desc: "Text, code, links and images — one short URL.",
+              desc: "Text, code, links and images — one short URL, no account needed.",
             },
           ].map((f) => (
             <div key={f.title} className="rounded-xl border bg-card p-4">
@@ -410,9 +507,7 @@ export default function Home() {
         </div>
       </main>
 
-      <footer className="border-t py-6 text-center text-sm text-muted-foreground">
-        Built with Next.js, Prisma &amp; Neon
-      </footer>
+      <SiteFooter />
     </div>
   );
 }
