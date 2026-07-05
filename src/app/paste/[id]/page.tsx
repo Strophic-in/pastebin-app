@@ -1,3 +1,5 @@
+import { cache } from "react";
+import type { Metadata } from "next";
 import { prisma } from "@/lib/prisma";
 import { notFound } from "next/navigation";
 import Link from "next/link";
@@ -23,6 +25,23 @@ export const dynamic = "force-dynamic";
 
 interface PageProps {
   params: Promise<{ id: string }>;
+}
+
+// Deduped across generateMetadata and the page render
+const getPaste = cache(async (id: string) =>
+  prisma.paste.findUnique({ where: { id } })
+);
+
+export async function generateMetadata({ params }: PageProps): Promise<Metadata> {
+  const { id } = await params;
+  const paste = await getPaste(id).catch(() => null);
+  return {
+    title: paste?.title || "Encrypted paste",
+    description:
+      "An end-to-end encrypted paste. Only people with the full link or password can read it.",
+    // User content — never index paste pages
+    robots: { index: false, follow: false },
+  };
 }
 
 const TYPE_META = {
@@ -79,7 +98,7 @@ export default async function PastePage({ params }: PageProps) {
 
   // Views are recorded by the client only after a successful decryption
   // (see /api/pastes/[id]/view), so serving this page doesn't burn a view.
-  const paste = await prisma.paste.findUnique({ where: { id } });
+  const paste = await getPaste(id);
   if (!paste) notFound();
 
   const timeExpired = isTimeExpired(paste.expiresAt);

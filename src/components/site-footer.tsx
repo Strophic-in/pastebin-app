@@ -6,7 +6,7 @@ export function SiteFooter() {
           Built by{" "}
           <span className="font-semibold text-foreground">Strophic</span>
         </p>
-        <p className="text-xs">Next.js · Prisma · Neon</p>
+        <p className="text-xs">End-to-end encrypted · No accounts · No tracking</p>
       </div>
     </footer>
   );
