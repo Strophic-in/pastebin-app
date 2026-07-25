@@ -42,9 +42,10 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import {
+  deriveFromCode,
   deriveKey,
   encryptString,
-  generateKey,
+  generateCode,
   generateSalt,
 } from "@/lib/crypto";
 
@@ -73,8 +74,10 @@ export function PasteComposer() {
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [createdUrl, setCreatedUrl] = useState<string | null>(null);
+  const [createdCode, setCreatedCode] = useState<string | null>(null);
   const [createdProtected, setCreatedProtected] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [codeCopied, setCodeCopied] = useState(false);
   const [dragging, setDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -111,45 +114,46 @@ export function PasteComposer() {
     }
     setLoading(true);
     try {
-      // Encrypt in the browser — the server only ever sees ciphertext.
+      // Encrypt in the browser — the server only ever sees ciphertext. Both
+      // the storage id and (unless a password is set) the AES key are derived
+      // from one short code, so the code alone locates and decrypts the paste.
       const usePassword = password.trim().length > 0;
-      let key: CryptoKey;
-      let keyFragment = "";
-      let salt: string | undefined;
-      if (usePassword) {
-        salt = generateSalt();
-        key = await deriveKey(password, salt);
-      } else {
-        const generated = await generateKey();
-        key = generated.key;
-        keyFragment = `#k=${generated.exported}`;
-      }
-      const payload = await encryptString(
-        type === "link" ? content.trim() : content,
-        key
-      );
+      const plain = type === "link" ? content.trim() : content;
+      const salt = usePassword ? generateSalt() : undefined;
 
-      const res = await fetch("/api/pastes", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          content: payload,
-          encrypted: true,
-          salt,
-          title: title.trim() || undefined,
-          type,
-          expiresIn: expiresIn !== "0" ? expiresIn : undefined,
-          maxViews: maxViews || undefined,
-        }),
-      });
-      const data = await res.json();
-      if (res.ok) {
-        setCreatedUrl(`${window.location.origin}${data.url}${keyFragment}`);
-        setCreatedProtected(usePassword);
-        setPassword("");
-        toast.success("Encrypted & created!");
-      } else {
+      // Two attempts, in the astronomically unlikely event of a code collision.
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const code = generateCode();
+        const derived = await deriveFromCode(code);
+        const key = usePassword ? await deriveKey(password, salt!) : derived.key;
+        const payload = await encryptString(plain, key);
+
+        const res = await fetch("/api/pastes", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            id: derived.id,
+            content: payload,
+            encrypted: true,
+            salt,
+            title: title.trim() || undefined,
+            type,
+            expiresIn: expiresIn !== "0" ? expiresIn : undefined,
+            maxViews: maxViews || undefined,
+          }),
+        });
+        const data = await res.json();
+        if (res.ok) {
+          setCreatedCode(code);
+          setCreatedUrl(`${window.location.origin}/p#${code}`);
+          setCreatedProtected(usePassword);
+          setPassword("");
+          toast.success("Encrypted & created!");
+          break;
+        }
+        if (res.status === 409 && attempt === 0) continue;
         toast.error(data.error || "Failed to create paste");
+        break;
       }
     } catch {
       toast.error("Something went wrong. Please try again.");
@@ -164,6 +168,14 @@ export function PasteComposer() {
     setCopied(true);
     toast.success("Link copied to clipboard");
     setTimeout(() => setCopied(false), 2000);
+  };
+
+  const copyCode = async () => {
+    if (!createdCode) return;
+    await navigator.clipboard.writeText(createdCode);
+    setCodeCopied(true);
+    toast.success("Code copied to clipboard");
+    setTimeout(() => setCodeCopied(false), 2000);
   };
 
   const shareLink = async () => {
@@ -181,6 +193,8 @@ export function PasteComposer() {
 
   const reset = () => {
     setCreatedUrl(null);
+    setCreatedCode(null);
+    setCodeCopied(false);
     setCreatedProtected(false);
     setTitle("");
     setText("");
@@ -207,6 +221,29 @@ export function PasteComposer() {
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
+          <div className="space-y-1.5">
+            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+              Paste code
+            </p>
+            <button
+              type="button"
+              onClick={copyCode}
+              title="Click to copy"
+              className="group mx-auto flex items-center gap-3 rounded-xl border-2 border-primary/30 bg-primary/5 px-5 py-3 transition-colors hover:border-primary/60"
+            >
+              <span className="font-mono text-2xl font-bold tracking-[0.2em]">
+                {createdCode}
+              </span>
+              {codeCopied ? (
+                <CheckIcon className="size-5 text-primary" />
+              ) : (
+                <CopyIcon className="size-5 text-muted-foreground group-hover:text-foreground" />
+              )}
+            </button>
+            <p className="text-xs text-muted-foreground">
+              Enter this code on the home page — or share the link below.
+            </p>
+          </div>
           <div className="flex items-start gap-2 rounded-lg border border-primary/30 bg-primary/5 px-3 py-2.5 text-left text-xs text-muted-foreground">
             <ShieldCheckIcon className="mt-0.5 size-4 shrink-0 text-primary" />
             {createdProtected ? (
@@ -214,18 +251,18 @@ export function PasteComposer() {
                 <span className="font-medium text-foreground">
                   Encrypted with your password.
                 </span>{" "}
-                Viewers must enter it to decrypt — share the password
-                separately. It can&apos;t be recovered if lost.
+                Viewers need the code to find the paste and your password to
+                decrypt it — share the password separately. It can&apos;t be
+                recovered if lost.
               </span>
             ) : (
               <span>
                 <span className="font-medium text-foreground">
                   End-to-end encrypted.
                 </span>{" "}
-                The decryption key lives in the part of the link after{" "}
-                <code className="font-mono">#</code> and never reaches our
-                server — share the full link, and only its holders can read
-                the paste.
+                The decryption key is derived from this code in the browser
+                and never reaches our server — only people you give the code
+                to can read the paste.
               </span>
             )}
           </div>

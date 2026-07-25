@@ -31,6 +31,9 @@ interface PasteViewerProps {
   content: string;
   encrypted: boolean;
   salt: string | null;
+  /** Key already derived from a paste code (the /p flow). When absent, the
+   *  legacy `#k=` URL fragment is used instead. */
+  decryptKey?: CryptoKey | null;
 }
 
 export function PasteViewer({
@@ -40,6 +43,7 @@ export function PasteViewer({
   content,
   encrypted,
   salt,
+  decryptKey,
 }: PasteViewerProps) {
   const [decrypted, setDecrypted] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -75,27 +79,27 @@ export function PasteViewer({
     if (salt) return; // wait for the user's password
 
     const match = window.location.hash.match(/^#k=([A-Za-z0-9_-]+)/);
-    if (!match) {
+    if (!decryptKey && !match) {
       setError(
-        "The decryption key is missing from this link. Make sure you open the complete link, including everything after the # symbol."
+        "The decryption key is missing. Make sure you use the complete code or link you were given."
       );
       return;
     }
     setDecrypting(true);
     (async () => {
       try {
-        const key = await importKey(match[1]);
+        const key = decryptKey ?? (await importKey(match![1]));
         setDecrypted(await decryptString(content, key));
         recordView();
       } catch {
         setError(
-          "This link's decryption key is invalid or incomplete, so the paste can't be decrypted."
+          "This code or link is invalid or incomplete, so the paste can't be decrypted."
         );
       } finally {
         setDecrypting(false);
       }
     })();
-  }, [encrypted, salt, content, recordView]);
+  }, [encrypted, salt, content, decryptKey, recordView]);
 
   const unlock = useCallback(
     async (e: React.FormEvent) => {

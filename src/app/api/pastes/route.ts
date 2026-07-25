@@ -1,6 +1,10 @@
 import { prisma } from "@/lib/prisma";
 import { NextResponse } from "next/server";
-import { nanoid } from "nanoid";
+import { Prisma } from "@prisma/client";
+
+// 16 bytes base64url — derived client-side from the paste code, so the server
+// never learns the code (or the AES key derived from it).
+const ID_PATTERN = /^[A-Za-z0-9_-]{22}$/;
 
 // Content arrives as an AES-GCM ciphertext payload (encrypted in the browser),
 // so the server can only enforce size limits — it never sees the plaintext.
@@ -11,7 +15,11 @@ const MAX_TITLE_LENGTH = 120;
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const { content, title, type = "text", expiresIn, maxViews, encrypted, salt } = body;
+    const { id, content, title, type = "text", expiresIn, maxViews, encrypted, salt } = body;
+
+    if (typeof id !== "string" || !ID_PATTERN.test(id)) {
+      return NextResponse.json({ error: "Invalid paste id" }, { status: 400 });
+    }
 
     if (!content || typeof content !== "string" || !content.trim()) {
       return NextResponse.json(
@@ -85,7 +93,7 @@ export async function POST(request: Request) {
 
     const paste = await prisma.paste.create({
       data: {
-        id: nanoid(8),
+        id,
         title: title?.trim() || null,
         type,
         content,
@@ -96,11 +104,15 @@ export async function POST(request: Request) {
       },
     });
 
-    return NextResponse.json({
-      id: paste.id,
-      url: `/paste/${paste.id}`,
-    });
+    return NextResponse.json({ id: paste.id });
   } catch (error) {
+    if (
+      error instanceof Prisma.PrismaClientKnownRequestError &&
+      error.code === "P2002"
+    ) {
+      // Astronomically unlikely code collision — the client retries with a new code.
+      return NextResponse.json({ error: "Code collision", retry: true }, { status: 409 });
+    }
     console.error("API Error creating paste:", error);
     return NextResponse.json(
       { error: "Failed to create paste" },

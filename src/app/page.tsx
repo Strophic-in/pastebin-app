@@ -8,6 +8,7 @@ import {
   SparklesIcon,
 } from "lucide-react";
 
+import { CodeLookup } from "@/components/code-lookup";
 import { PasteComposer } from "@/components/paste-composer";
 import { SiteHeader } from "@/components/site-header";
 import { SiteFooter } from "@/components/site-footer";
@@ -45,19 +46,19 @@ const HOW_IT_WORKS = [
   {
     icon: KeyRoundIcon,
     title: "2. Encrypted in your browser",
-    desc: "Your content is encrypted with AES-256 before it leaves your device. The decryption key stays in the link fragment or your password — it never reaches the server.",
+    desc: "Your content is encrypted with AES-256 before it leaves your device. The decryption key is derived from your paste code (or password) — it never reaches the server.",
   },
   {
     icon: Share2Icon,
-    title: "3. Share the link",
-    desc: "Send the short link to anyone. Only people with the full link — or the password — can decrypt and read the paste.",
+    title: "3. Share the code",
+    desc: "Send the short 10-character code or link to anyone. Only people with the code — and the password, if you set one — can decrypt and read the paste.",
   },
 ];
 
 const FAQS = [
   {
     q: "Is this pastebin really private?",
-    a: "Yes. Every paste is encrypted with AES-256-GCM in your browser before upload, so the server and database only ever store unreadable ciphertext. The decryption key travels in the link fragment (the part after #), which browsers never send to servers — meaning not even the site operator can read your pastes.",
+    a: "Yes. Every paste is encrypted with AES-256-GCM in your browser before upload, so the server and database only ever store unreadable ciphertext. The decryption key is derived from your short paste code right in the browser, and the code itself only ever travels in the link fragment (the part after #), which browsers never send to servers — meaning not even the site operator can read your pastes.",
   },
   {
     q: "Do I need an account to share a paste?",
@@ -147,9 +148,10 @@ export default function Home() {
           </h1>
           <p className="mx-auto mt-3 max-w-md text-muted-foreground">
             Paste text, drop a link or upload an image — it&apos;s encrypted in
-            your browser before it ever leaves, and only people you share the
-            link (or password) with can read it.
+            your browser before it ever leaves, and you get one short code
+            that finds and unlocks it. No account, no long URLs.
           </p>
+          <CodeLookup />
         </section>
 
         <PasteComposer />
