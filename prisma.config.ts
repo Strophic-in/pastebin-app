@@ -8,7 +8,8 @@ export default defineConfig({
   migrations: {
     path: "prisma/migrations",
   },
+  // The CLI (db push, migrations) uses the direct connection; the app uses the pooled one.
   datasource: {
-    url: process.env["DATABASE_URL"],
+    url: process.env["DIRECT_URL"] ?? process.env["DATABASE_URL"],
   },
 });
